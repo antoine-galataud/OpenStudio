@@ -111,6 +111,10 @@ class UTILITIES_API BCLMeasure
   /// Suggested values for the second level taxonomy tag
   static std::vector<std::string> suggestedSecondLevelTaxonomyTerms(const std::string& firstLevelTaxonomyTerm);
 
+  static std::vector<openstudio::path> approvedSubFolders();
+
+  static std::vector<openstudio::path> ignoredSubFolders();
+
   //@}
   /** @name Destructor */
   //@{

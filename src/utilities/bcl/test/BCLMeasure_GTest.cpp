@@ -419,7 +419,7 @@ TEST_F(BCLFixture, TestIgnoredSubDirectoryLogic) {
     bool ignore = (filename.empty() || boost::starts_with(filename, "."));
 
     // This will check back up to the root (C:\ or /)... It's missing a condition `parentPath != srcDir`
-    while (!ignore && !parentPath.empty()) {
+    while (!ignore && !parentPath.empty() && (parentPath != measureDir)) {
       if (std::find_if(ignoredSubFolders.begin(), ignoredSubFolders.end(),
                        [&measureDir, &parentPath](const auto& subFolderPath) {
                          auto fullSubFolderPath = measureDir / subFolderPath;

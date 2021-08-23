@@ -30,6 +30,7 @@
 #include "BCLMeasure.hpp"
 #include "LocalBCL.hpp"
 
+#include "../core/Filesystem.hpp"
 #include "../core/PathHelpers.hpp"
 #include "../core/FilesystemHelpers.hpp"
 #include "../core/StringHelpers.hpp"
@@ -47,6 +48,16 @@
 #include <src/utilities/embedded_files.hxx>
 
 namespace openstudio {
+
+std::vector<openstudio::path> BCLMeasure::approvedSubFolders() {
+  static const std::vector<openstudio::path> result{"docs", "resources", "tests"};
+  return result;
+}
+
+std::vector<openstudio::path> BCLMeasure::ignoredSubFolders() {
+  static const std::vector<openstudio::path> result{"tests/output"};
+  return result;
+}
 
 void BCLMeasure::createDirectory(const openstudio::path& dir) {
   if (exists(dir)) {
@@ -66,6 +77,8 @@ bool BCLMeasure::copyDirectory(const path& source, const path& destination) cons
     return false;
   }
 
+  // Why not copy the xml, then copy each entry from the bclXML... It seems so much simpler, and you wouldn't have to do crazy filtering
+  // The logic would just live instead checkForUpdatesFiles instead of being repeated in BCLMeasure::clone
   openstudio::path xmlPath = openstudio::filesystem::system_complete(m_bclXML.path());
 
   for (const auto& path : openstudio::filesystem::directory_files(source)) {
@@ -948,6 +961,36 @@ bool BCLMeasure::checkForUpdatesFiles() {
     }
   }
 
+  auto isInIgnoredSubDirectory = [](const fs::path& relativeFilePath, const fs::path& measureDir,
+                                    const std::vector<fs::path>& ignoredSubFolders = {}) {
+    fs::path srcItemPath = measureDir / relativeFilePath;
+    auto parentPath = srcItemPath.parent_path();
+    std::string filename = toString(relativeFilePath.filename());
+    bool ignore = (filename.empty() || boost::starts_with(filename, "."));
+
+    // This will check back up to the root (C:\ or /)... It's missing a condition `parentPath != srcDir`
+    while (!ignore && !parentPath.empty() && (parentPath != measureDir)) {
+      if (std::find_if(ignoredSubFolders.begin(), ignoredSubFolders.end(),
+                       [&measureDir, &parentPath](const auto& subFolderPath) {
+                         auto fullSubFolderPath = measureDir / subFolderPath;
+                         return parentPath == fullSubFolderPath;
+                       })
+          != ignoredSubFolders.end()) {
+        ignore = true;
+        break;
+      }
+      parentPath = parentPath.parent_path();
+
+      // I shouldn't go above the measure directory
+      // fs::equivalent needs both path to exist, they don't here
+      // EXPECT_FALSE(fs::equivalent(parentPath, measureDir / ".."));
+      EXPECT_NE(parentPath, measureDir.parent_path().parent_path())
+        << "For relativeFilePath = " << relativeFilePath << ", measureDir = " << measureDir;
+    }
+
+    return ignore;
+  };
+
   // look for new files and add them
   openstudio::path srcDir = m_directory / "tests";
   openstudio::path ignoreDir = srcDir / "output";
@@ -955,7 +998,8 @@ bool BCLMeasure::checkForUpdatesFiles() {
   if (openstudio::filesystem::is_directory(srcDir)) {
 
     // TODO: The code below seems to be assuming that recursive_directory_files is called since it tries to exclude output/*** files
-    for (const auto& file : openstudio::filesystem::directory_files(srcDir)) {
+    for (const auto& file : openstudio::filesystem::recursive_directory_files(srcDir)) {
+
       openstudio::path srcItemPath = srcDir / file;
       openstudio::path parentPath = srcItemPath.parent_path();
 
@@ -1106,18 +1150,36 @@ bool BCLMeasure::save() const {
 
 boost::optional<BCLMeasure> BCLMeasure::clone(const openstudio::path& newDir) const {
 
-  // The logic here is weird.
   if (openstudio::filesystem::exists(newDir)) {
     if (!isEmptyDirectory(newDir)) {
+      LOG(Warn, "Cannot clone measure to newDir=" << newDir << " since it already exists and is not empty.");
       return boost::none;
     }
   } else {
     if (!openstudio::filesystem::create_directories(newDir)) {
+      LOG(Warn, "Cannot clone measure to newDir=" << newDir << " since we cannot create the directory. Check file permissions.");
       return boost::none;
     }
   }
 
-  removeDirectory(newDir);
+  // TODO: The logic here is weird. why are we creating then removing it?
+  // removeDirectory(newDir);
+
+  // Copy the measure.xml
+  openstudio::filesystem::copy_file_no_throw(m_directory / openstudio::path{"measure.xml"}, newDir / openstudio::path{"measure.xml"});
+
+  // Then copy whatever is referneced in the measure.xml
+  for (const BCLFileReference& file : this->files()) {
+
+    if (file.usageType() != "doc") {
+      // TODO: do we want to keep ignoring the docs/ directory?
+
+      // BCLFileReference::path() is absolute
+      openstudio::path oriPath = file.path();
+      openstudio::path relativePath = openstudio::filesystem::relative(oriPath, m_directory);
+      openstudio::filesystem::copy_file_no_throw(oriPath, newDir / relativePath);
+    }
+  }
 
   // DLM: do not copy entire directory, only copy tracked files
   if (!this->copyDirectory(this->directory(), newDir)) {
